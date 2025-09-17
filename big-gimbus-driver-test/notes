@@ -1,0 +1,41 @@
+# Gimbus Board Bring-up Checklist
+## Step 1: Foundational Checks │███│ 100%
+- [x] Power On & Quiescent Current: Power board from a bench supply and check for low idle current.
+
+- [x] Basic Flash: Upload a simple sketch to blink the onboard LED.
+
+- [x] Serial Communication: Verify Serial.println() works over the USB-C port.
+
+## Step 2: Peripheral Communication │█░░░│ 25%
+- [x] I2C Bus Scan: Run an I2C scanner to detect the two HUSB238A chips at 0x42 and 0x62.
+
+- [ ] HUSB Register Read: Read the CC status register from each HUSB to confirm register-level access.
+
+- [x] Encoder SPI Test: Read the MT6701 angle via SPI and print it to serial to verify it works.
+
+- [ ] Driver SPI Test: Read the DRV8316 fault register via SPI to confirm communication with the motor driver.
+
+## Step 3: Core Motor Control │██░░│ 50%
+- [x] Open-Loop Velocity: Spin the motor using open-loop control to test the PWM and power stage.
+
+- [x] Closed-Loop Position Control: Integrate the encoder and initFOC() to test basic closed-loop functionality.
+
+- [x] Current Sensing Verification: Enable the LowsideCurrentSense and confirm plausible current readings.
+
+- [ ] Current Control Tuning: Tune the q/d axis PID controllers for stable torque control.
+
+## Step 4: Power Systems │░░░│0%
+- [ ] USB-PD 20V Negotiation: Connect a PD source and verify the HUSB negotiates a 20V contract.
+
+- [ ] Bus Voltage Measurement: Use a multimeter to confirm the main power bus is at ~20V.
+
+- [ ] Power OR-ing Test: Plug in two sources and confirm the bus takes the higher voltage.
+
+## Step 5: Networking │█░░░│25%
+- [x] Basic CAN Communication: Establish a simple PING/PONG between two boards at 1Mbps.
+
+- [ ] CAN Orientation Flipping: Implement and test the logic to read HUSB orientation and flip the CAN lines via GPIOs.
+
+- [ ] Bandwidth Stress Test: Send commands to all 12 (simulated) node IDs at the target update rate (~33Hz).
+
+- [ ] Robustness & Hot-plug Test: Unplug and replug a node during operation and verify it seamlessly rejoins the bus.
