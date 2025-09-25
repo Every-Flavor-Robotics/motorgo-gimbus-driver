@@ -39,3 +39,35 @@
 - [ ] Bandwidth Stress Test: Send commands to all 12 (simulated) node IDs at the target update rate (~33Hz).
 
 - [ ] Robustness & Hot-plug Test: Unplug and replug a node during operation and verify it seamlessly rejoins the bus.
+
+
+
+
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES:
+ - framework-arduinoespressif32 @ 3.0.7
+ - framework-arduinoespressif32-libs @ 5.1.0+sha.632e0c2a9f
+ - tool-esptoolpy @ 4.8.1
+ - tool-mklittlefs @ 3.2.0
+ - tool-riscv32-esp-elf-gdb @ 11.2.0+20220823
+ - tool-xtensa-esp-elf-gdb @ 11.2.0+20230208
+ - toolchain-riscv32-esp @ 12.2.0+20230208
+ - toolchain-xtensa-esp32s3 @ 12.2.0+20230208
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 45 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- FastLED @ 3.10.2
+|-- Simple FOC @ 2.3.5
+|-- SimpleFOCDrivers @ 1.0.9
+|-- Adafruit HUSB238 Library @ 1.0.1
+|-- Wire @ 3.0.7
+Building in release mode
+Compiling .pio\build\i2c-scan\src\i2c-scan.cpp.o
+Building .pio\build\i2c-scan\bootloader.bin
+Generating partitions .pio\build\i2c-scan\partitions.bin
+esptool.py v4.8.1.1
+Creating esp32s3 image...
+Merged 1 ELF section
+Successfully created esp32s3 image.

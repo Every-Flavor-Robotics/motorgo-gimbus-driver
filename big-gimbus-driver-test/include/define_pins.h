@@ -10,6 +10,8 @@
 // CAN bus flip switches
 #define can_flip_left 17
 #define can_flip_right 18
+#define can_tx 38
+#define can_rx 37
 
 // I2C bus pins
 #define i2c_sda 35
