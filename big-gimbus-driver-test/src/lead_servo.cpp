@@ -9,6 +9,7 @@
 #include <driver/twai.h>
 #include "define_pins.h"
 #include "can_protocol.h"
+#include "SPIFFS.h"
 
 // !! CONTROLLER NODE - ID 0 !!
 #define MY_MOTOR_ID MOTOR_CONTROLLER
@@ -470,7 +471,37 @@ void processSerialCommand() {
         broadcast = true;
     } else if (strcmp(token, "ME") == 0) {
         target_motor = MY_MOTOR_ID;
-    } else {
+    }
+      else if(strcmp(token, "CAL") == 0){
+        Serial.println("-> CAL command received. Disabling motor and deleting calibration LUT...");
+        
+        // 1. Disable the motor to be safe
+        motor.disable();
+        
+        // 2. Initialize the SPIFFS filesystem
+        if (!SPIFFS.begin(true)) {
+            Serial.println("-> Error: Failed to mount SPIFFS. Cannot delete file.");
+        } else {
+            // 3. Delete the specific calibration file
+            if (SPIFFS.exists("/calibration.bin")) {
+                if (SPIFFS.remove("/calibration.bin")) {
+                    Serial.println("-> File '/calibration.bin' deleted successfully.");
+                } else {
+                    Serial.println("-> Error: Failed to delete '/calibration.bin'.");
+                }
+            } else {
+                Serial.println("-> Info: File '/calibration.bin' not found. Nothing to delete.");
+            }
+        }
+        
+        Serial.println("Restarting board in 2 seconds...");
+        delay(2000); // Short delay to ensure the message is sent
+        
+        // 3. Restart the ESP32
+        ESP.restart();
+        return; // Stop further processing of the command
+    }
+    else {
         target_motor = atoi(token);
         if (target_motor > 11) {
             Serial.println("Invalid motor ID");
