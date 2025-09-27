@@ -39,3 +39,36 @@
 - [ ] Bandwidth Stress Test: Send commands to all 12 (simulated) node IDs at the target update rate (~33Hz).
 
 - [ ] Robustness & Hot-plug Test: Unplug and replug a node during operation and verify it seamlessly rejoins the bus.
+
+
+Executing task: C:\Users\alexc\.platformio\penv\Scripts\platformio.exe run --environment SimpleFoc-Studio 
+
+Processing SimpleFoc-Studio (platform: espressif32; board: esp32-s3-devkitc1-n8r8; framework: arduino)
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+PYTHONEXE updated to penv environment: C:\Users\alexc\.platformio\penv\Scripts\python.exe
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-s3-devkitc1-n8r8.html
+PLATFORM: Espressif 32 (55.3.30) > Espressif ESP32-S3-DevKitC-1-N8R8 (8 MB Flash Quad, 8 MB PSRAM Octal)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 8MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES:
+ - contrib-piohome @ 3.4.4
+ - framework-arduinoespressif32 @ 3.3.0
+ - framework-arduinoespressif32-libs @ 5.5.0+sha.b66b5448e0
+ - tool-esptoolpy @ 5.0.2
+ - tool-mklittlefs @ 3.2.0
+ - toolchain-xtensa-esp-elf @ 14.2.0+20241119
+*** Applied include path shortening for 325 framework paths ***
+*** Path length reduced from 38453 to ~13521 characters ***
+*** Estimated savings: 24375 characters ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 46 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- Simple FOC @ 2.3.5
+|-- SimpleFOCDrivers @ 1.0.9
+|-- FastLED @ 3.10.2
+|-- Adafruit HUSB238 Library @ 1.0.1
+|-- Wire @ 3.3.0
+Building in release mode

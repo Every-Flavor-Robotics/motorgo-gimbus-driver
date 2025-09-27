@@ -106,7 +106,7 @@ void CalibratedSensor::calibrate(FOCMotor &motor, int settle_time_ms)
 	// which amounts to n_ticks (n_pos * motor.pole_pairs) samples per mechanical rotation
 	// Additionally, the motor will take n2_ticks steps to reach any of the n_ticks posiitons
 	// incrementing the electrical angle by deltaElectricalAngle each time
-	int n_pos = 5;
+	int n_pos = 200;
 	int _NPP = motor.pole_pairs;								      // number of pole pairs which is user input
 	const int n_ticks = n_pos * _NPP;							      // number of positions to be sampled per mechanical rotation.  Multiple of NPP for filtering reasons (see later)
 	const int n2_ticks = 5;										      // increments between saved samples (for smoothing motion)

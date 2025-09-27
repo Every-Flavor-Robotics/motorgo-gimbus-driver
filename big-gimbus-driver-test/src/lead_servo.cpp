@@ -38,7 +38,7 @@ float speed_voltage_limit = 2;
 float speed_current_limit = 0.2;
 float torque_voltage_limit = 12;
 float torque_current_limit = 1.2;
-float maxCurr = 1.0f;
+float maxCurr = 1.2f;
 float speed = 0.0;
 float target = 10.0;
 
@@ -58,7 +58,7 @@ bool vibration = false;
 float curr1;
 float curr2;
 bool curr1on = true;
-unsigned long switchperiod = 0;
+float switchperiod = 0;
 unsigned long vib_prevMillis = 0;
 unsigned long vib_currMillis;
 
@@ -306,13 +306,13 @@ bool setup_motor() {
     motor.linkDriver(&driver);
     i_sense_motor.linkDriver(&driver);
     
-    motor.voltage_sensor_align = 1;
+    motor.voltage_sensor_align = 4;
     motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
     motor.torque_controller = TorqueControlType::voltage;
     motor.controller = MotionControlType::torque;
     
     motor.voltage_limit = 4.0;
-    motor.current_limit = 1.2;
+    motor.current_limit = 1.0;
     
     // Current control PID parameters
     motor.PID_current_d.P = .25;
@@ -345,18 +345,18 @@ bool setup_motor() {
     delay(2000);
     motor.init();
     
-    i_sense_motor.init();
-    motor.linkCurrentSense(&i_sense_motor);
+    // i_sense_motor.init();
+    // motor.linkCurrentSense(&i_sense_motor);
     
     motor.initFOC();
     
     Serial.println("Motor will rotate slowly for calibration.");
   
-    sensor_calibrated.voltage_calibration = 3;
+    sensor_calibrated.voltage_calibration = 4;
 
     // Perform calibration - motor will slowly rotate
     if (!sensor_calibrated.loadCalibration(motor)){
-        sensor_calibrated.calibrate(motor, 500);    
+        sensor_calibrated.calibrate(motor, 10);    
         sensor_calibrated.saveCalibration(motor);
     }
     Serial.println("Calibration complete!");
@@ -409,15 +409,31 @@ void processLocalCommand(char cmd_type, char* tokens[], int tokenCount) {
                 motor.voltage_limit = torque_voltage_limit;
                 motor.current_limit = torque_current_limit;
                 noslack = false;
+                reeling = false;
                 vibration = false;
                 Serial.println("Controller: Torque mode");
             }
             break;
-            
+
+        case 'B': // vibration
+            Serial.println("Vibration time");
+            motor.enable();
+            noslack = false;
+            reeling = false;
+            vibration = true;
+                curr1 = atof(tokens[0]);
+                curr2 = atof(tokens[1]);
+                if (curr1 >=0){ curr1 = min(curr1, maxCurr); }
+                else{ curr1 = max(curr1, -maxCurr); }
+                if (curr2 >=0){ curr2 = min(curr2, maxCurr); }
+                else{ curr2 = max(curr2, -maxCurr); }
+                switchperiod = 1.0f/(atof(tokens[2]));
+            break;
         case 'O':  // Off
             target = 0;
             motor.disable();
             noslack = false;
+            reeling = false;
             vibration = false;
             Serial.println("Controller: Motor off");
             break;
@@ -568,6 +584,7 @@ void processSerialCommand() {
         case 'B': {  // Vibration mode
             if (tokenCount >= 3) {
                 CanPayloadVibration payload;
+                Serial.println ("vibes");
                 payload.current1_scaled = (int16_t)(atof(tokens[0]) * 1000);
                 payload.current2_scaled = (int16_t)(atof(tokens[1]) * 1000);
                 payload.frequency = atoi(tokens[2]);
@@ -652,7 +669,7 @@ void handleReeling() {
 
 void handleVibration() {
     vib_currMillis = millis();
-    if (vib_currMillis - vib_prevMillis >= switchperiod / 2) {
+    if (vib_currMillis - vib_prevMillis >= switchperiod / 2.0f) {
         vib_prevMillis = vib_currMillis;
         if (curr1on) { 
             target = curr1; 
@@ -680,8 +697,8 @@ void setup() {
     Serial.println("Examples:");
     Serial.println("  1 S 10        - Left hand up at speed 50");
     Serial.println("  ALL O         - All motors off");
-    Serial.println("  ME T 0.1      - Controller torque 0.5");
-    Serial.println("  3 B 0.3 -0.3 10 - Right hand up vibrate");
+    Serial.println("  ME T 0.2      - Controller torque 0.5");
+    Serial.println("  ME B 0.1 -0.1 100 - Right hand up vibrate");
     Serial.println("\nPing Commands:");
     Serial.println("  PING          - Test all motors connectivity");
     Serial.println("  PING 3        - Test specific motor");
@@ -697,10 +714,10 @@ void loop() {
     // Process serial commands and forward to CAN
     processSerialCommand();
     
-    // Process any incoming CAN messages (pong responses)
-    if (!ping_test_active) {
-        processPongResponse();
-    }
+    // // Process any incoming CAN messages (pong responses)
+    // if (!ping_test_active) {
+    //     processPongResponse();
+    // }
     
     // Core motor contr ol for local motor
     motor.loopFOC();
@@ -709,13 +726,17 @@ void loop() {
     if (noslack) {
         handleReeling();
     } else if (vibration) {
+        Serial.print(curr1);
+        Serial.print("  :   ");
+        Serial.print(curr2);
+        Serial.print("  :   ");
+        Serial.print(switchperiod);
+        Serial.println("handling vibration");
         handleVibration();
     }
     
     // Move local motor
     motor.move(target);
-    motor.disable();
-
 
     // // 1. Broadcast a test message periodically
     // if (millis() - last_test_send > 2000) {
