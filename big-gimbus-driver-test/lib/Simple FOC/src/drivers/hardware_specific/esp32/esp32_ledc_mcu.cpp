@@ -102,7 +102,7 @@ bool _ledcAttachChannelAdvanced(uint8_t pin, int _channel, int _group, uint32_t 
   if (inverted) pin_high_level = !pin_high_level;
 
   uint32_t duty = ledc_get_duty(group, channel);
-  ledc_channel_config_t ledc_channel;
+  ledc_channel_config_t ledc_channel = {};  // zero-init so IDF5 sleep_mode field defaults to 0
   ledc_channel.speed_mode = group;
   ledc_channel.channel =  channel;
   ledc_channel.timer_sel = LEDC_TIMER_0; 

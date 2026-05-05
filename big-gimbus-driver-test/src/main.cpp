@@ -58,7 +58,7 @@ CRGB ind[1];
 // ============================================================
 //  State
 // ============================================================
-enum MotorMode { MODE_DISABLED, MODE_VELOCITY, MODE_POSITION, MODE_TORQUE, MODE_ERROR };
+enum MotorMode { MODE_DISABLED, MODE_VELOCITY, MODE_POSITION, MODE_TORQUE, MODE_CALIBRATING, MODE_ERROR };
 MotorMode currentMode = MODE_DISABLED;
 float target = 0.0f;
 
@@ -76,6 +76,7 @@ void updateLED() {
         case MODE_VELOCITY:  ind[0] = CRGB(0, 255, 0);     break;  // Green
         case MODE_POSITION:  ind[0] = CRGB(255, 255, 0);   break;  // Yellow
         case MODE_TORQUE:    ind[0] = CRGB(255, 0, 255);   break;  // Magenta
+        case MODE_CALIBRATING: ind[0] = CRGB(255, 165, 0);  break;  // Orange
         case MODE_ERROR:     ind[0] = CRGB(255, 0, 0);     break;  // Red
     }
     FastLED.show();
@@ -93,6 +94,7 @@ void sendTelemetry() {
         case MODE_VELOCITY: modeChar = 'V'; break;
         case MODE_POSITION: modeChar = 'P'; break;
         case MODE_TORQUE:   modeChar = 'T'; break;
+        case MODE_CALIBRATING: modeChar = 'C'; break;
         case MODE_ERROR:    modeChar = 'E'; break;
         default:            modeChar = 'D'; break;
     }
@@ -110,7 +112,8 @@ void sendTelemetry() {
 //  Heartbeat watchdog
 // ============================================================
 void checkHeartbeat() {
-    if (currentMode == MODE_DISABLED || currentMode == MODE_ERROR) return;
+    // Do not fire during calibration, idle, or error — motor is either off or intentionally busy
+    if (currentMode == MODE_DISABLED || currentMode == MODE_CALIBRATING || currentMode == MODE_ERROR) return;
     if (millis() - lastCommandTime > HEARTBEAT_TIMEOUT_MS) {
         target = 0.0f;
         motor.disable();
@@ -121,12 +124,62 @@ void checkHeartbeat() {
 }
 
 // ============================================================
+//  Forced recalibration
+//  Deletes the saved SPIFFS file, runs a fresh calibration,
+//  saves the result, and re-inits FOC. The motor must be
+//  free to rotate during this call (~10 s). Heartbeat is
+//  suppressed for the duration via MODE_CALIBRATING.
+// ============================================================
+void runCalibration() {
+    Serial.println("DBG:Recalibration requested - disabling motor");
+
+    target = 0.0f;
+    motor.disable();
+    currentMode = MODE_CALIBRATING;
+    updateLED();
+
+    // Flush any pending telemetry so the Jetson sees the C state immediately
+    lastTelemTime = 0;
+    sendTelemetry();
+
+    // Delete existing calibration file
+    if (SPIFFS.exists("/calibration.bin")) {
+        SPIFFS.remove("/calibration.bin");
+        Serial.println("DBG:Old calibration deleted");
+    }
+
+    // Re-link raw sensor for calibration pass
+    motor.linkSensor(&sensor);
+    motor.initFOC();
+
+    Serial.println("DBG:Calibrating - motor will rotate slowly...");
+    sensor_calibrated.voltage_calibration = 4;
+    sensor_calibrated.calibrate(motor, 10);
+    sensor_calibrated.saveCalibration(motor);
+    Serial.println("DBG:Calibration complete and saved");
+
+    // Switch back to calibrated sensor
+    motor.linkSensor(&sensor_calibrated);
+    motor.initFOC();
+
+    motor.disable();
+    currentMode = MODE_DISABLED;
+    updateLED();
+
+    // Reset heartbeat timer so the watchdog doesn't fire immediately
+    lastCommandTime = millis();
+
+    Serial.println("DBG:Ready after recalibration");
+}
+
+// ============================================================
 //  Serial command parser
 //  Protocol: CMD:<type>:<value>\n
 //    CMD:V:<float>  - velocity mode (rad/s)
 //    CMD:P:<float>  - position mode (rad)
 //    CMD:T:<float>  - torque mode (voltage)
 //    CMD:O          - disable motor
+//    CMD:R          - force sensor recalibration
 // ============================================================
 void processSerialCommand() {
     if (!Serial.available()) return;
@@ -204,6 +257,11 @@ void processSerialCommand() {
             break;
         }
 
+        case 'R': {
+            runCalibration();
+            break;
+        }
+
         default:
             Serial.printf("DBG:Unknown command type '%c'\n", type);
             break;
@@ -233,7 +291,15 @@ bool setup_motor() {
     // Driver
     driver.voltage_power_supply = VOLTAGE_POWER_SUPPLY;
     driver.pwm_frequency = 20000;
+
     driver.init(&SPI);
+    if (!driver.initialized) {
+        Serial.println("DBG:Driver init failed - check SPI wiring and DRV_CS pin");
+        currentMode = MODE_ERROR;
+        updateLED();
+        return false;
+    }
+
     driver.setCurrentSenseGain(DRV8316_CSAGain::Gain_0V15);
     driver.setSlew(DRV8316_Slew::Slew_200Vus);
     driver.setPWMMode(DRV8316_PWMMode::PWM6_Mode);
@@ -340,7 +406,7 @@ void setup() {
     updateLED();
 
     Serial.println("DBG:=== Ready ===");
-    Serial.println("DBG:Commands: CMD:V:<rad/s>  CMD:P:<rad>  CMD:T:<voltage>  CMD:O");
+    Serial.println("DBG:Commands: CMD:V:<rad/s>  CMD:P:<rad>  CMD:T:<voltage>  CMD:O  CMD:R");
 }
 
 void loop() {
