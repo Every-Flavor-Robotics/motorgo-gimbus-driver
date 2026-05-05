@@ -6,7 +6,7 @@ ESP32-S3 (Seeed XIAO) BLDC motor driver for the Gimbus robot. Receives serial co
 
 | Component | Part |
 |-----------|------|
-| MCU | Seeed XIAO ESP32-S3 |
+| MCU | ESP32-S3 |
 | Motor driver | DRV8316 (6-PWM mode) |
 | Encoder | MT6701 (SPI, HSPI bus) |
 | Motor | 11 pole-pair, 6.9Ω, 24 KV BLDC |
