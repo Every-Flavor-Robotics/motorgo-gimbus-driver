@@ -30,8 +30,8 @@
 #define MAX_CURRENT           1.2f
 
 // Velocity mode limits
-#define SPEED_VOLTAGE_LIMIT   2.0f
-#define SPEED_CURRENT_LIMIT   0.2f
+#define SPEED_VOLTAGE_LIMIT   5.0f
+#define SPEED_CURRENT_LIMIT   1.0f
 
 // Heartbeat / telemetry timing
 #define HEARTBEAT_TIMEOUT_MS  1000
@@ -154,7 +154,9 @@ void runCalibration() {
 
     Serial.println("DBG:Calibrating - motor will rotate slowly...");
     sensor_calibrated.voltage_calibration = 4;
+    motor.useMonitoring(Serial);              // calibrate() requires a non-null monitor_port
     sensor_calibrated.calibrate(motor, 10);
+    motor.monitor_port = nullptr;             // restore clean serial for Jetson comms
     sensor_calibrated.saveCalibration(motor);
     Serial.println("DBG:Calibration complete and saved");
 
@@ -203,7 +205,7 @@ void processSerialCommand() {
             // Clamp to velocity limit
             value = constrain(value, -VELOCITY_LIMIT, VELOCITY_LIMIT);
             target = value;
-            motor.controller = MotionControlType::velocity;
+            motor.controller = MotionControlType::velocity_openloop;
             motor.voltage_limit = SPEED_VOLTAGE_LIMIT;
             motor.current_limit = SPEED_CURRENT_LIMIT;
             if (currentMode != MODE_VELOCITY) {
@@ -355,16 +357,24 @@ bool setup_motor() {
     Serial.println("DBG:Loading sensor calibration...");
     sensor_calibrated.voltage_calibration = 4;
 
-    if (!SPIFFS.begin(true)) {
+    if (!SPIFFS.begin(false)) {  // false = don't format on failure; preserves existing calibration
         Serial.println("DBG:SPIFFS mount failed - calibration unavailable");
         currentMode = MODE_ERROR;
         updateLED();
         return false;
     }
 
+        //------------------------------------------------- Delete existing calibration file for testing
+    if (SPIFFS.exists("/calibration.bin")) {
+        SPIFFS.remove("/calibration.bin");
+        Serial.println("DBG:Old calibration deleted");
+    }
+
     if (!sensor_calibrated.loadCalibration(motor)) {
         Serial.println("DBG:No calibration found - calibrating now (motor will rotate)...");
+        motor.useMonitoring(Serial);          // calibrate() requires a non-null monitor_port
         sensor_calibrated.calibrate(motor, 10);
+        motor.monitor_port = nullptr;         // restore clean serial for Jetson comms
         sensor_calibrated.saveCalibration(motor);
         Serial.println("DBG:Calibration saved");
     } else {
