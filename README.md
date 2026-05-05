@@ -1,6 +1,6 @@
 # motorgo-gimbus-driver
 
-ESP32-S3 (Seeed XIAO) BLDC motor driver for the Gimbus robot. Receives serial commands from a Jetson Nano and drives a single BLDC motor via SimpleFOC + DRV8316.
+ESP32-S3 BLDC motor driver for the Gimbus servo board. Receives serial commands from a Jetson Nano and drives a single BLDC motor via SimpleFOC + DRV8316.
 
 ## Hardware
 
