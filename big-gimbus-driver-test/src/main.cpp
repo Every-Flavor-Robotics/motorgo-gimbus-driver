@@ -1,103 +1,354 @@
 #include <Arduino.h>
-#include <Fastled.h>
-
+#include <FastLED.h>
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
 #include <encoders/mt6701/MagneticSensorMT6701SSI.h>
-
+#include <encoders/calibrated/CalibratedSensor.h>
+#include <drivers/drv8316/drv8316.h>
+#include <SPIFFS.h>
 #include "define_pins.h"
 
-// Magnetic encoder MT6701 SPI
+// ============================================================
+//  Hardware constants
+// ============================================================
+#define SPI_CLK   21
+#define SPI_CIPO  48
+#define SPI_COPI  47
+#define DRV_CS    14
+
+// Motor parameters
+#define POLE_PAIRS  11
+#define MOTOR_KV    24
+#define MOTOR_R     6.9f
+
+// Limits
+#define VOLTAGE_POWER_SUPPLY  12.0f
+#define VOLTAGE_LIMIT         4.0f
+#define CURRENT_LIMIT         1.0f
+#define VELOCITY_LIMIT        100.0f   // rad/s
+#define MAX_TORQUE_VOLTAGE    12.0f
+#define MAX_CURRENT           1.2f
+
+// Velocity mode limits
+#define SPEED_VOLTAGE_LIMIT   2.0f
+#define SPEED_CURRENT_LIMIT   0.2f
+
+// Heartbeat / telemetry timing
+#define HEARTBEAT_TIMEOUT_MS  1000
+#define TELEM_INTERVAL_MS     100    // 10 Hz
+
+// Serial command buffer
+#define CMD_BUF_LEN  64
+
+// ============================================================
+//  Motor objects
+// ============================================================
 SPIClass hspi = SPIClass(HSPI);
 MagneticSensorMT6701SSI sensor(enc_cs);
+CalibratedSensor sensor_calibrated = CalibratedSensor(sensor);
 
-// BLDC motor instance
-int pole_pairs = 11; // number of pole pairs
-int kv = 24; // rpm/V
-float resistance = 6.900; // phase resistance
-BLDCMotor motor = BLDCMotor(pole_pairs, resistance, kv);
-BLDCDriver6PWM driver = BLDCDriver6PWM(UH, UL, VH, VL, WH, WL);
-float csa_gain = 0.15; // Volts per Amp
-LowsideCurrentSense i_sense_motor = LowsideCurrentSense(csa_gain, 1.0f, isen_u, isen_v, isen_w); 
+BLDCMotor motor = BLDCMotor(POLE_PAIRS, MOTOR_R, MOTOR_KV);
+DRV8316Driver6PWM driver = DRV8316Driver6PWM(UH, UL, VH, VL, WH, WL, DRV_CS, false, NOT_SET, NOT_SET);
 
-// motor setup
-bool setup_motor(){
-  hspi.begin(enc_scl, enc_sda, enc_cs);
-  delay(300);
-  sensor.init(&hspi);
-  motor.linkSensor(&sensor);
-  
-  driver.voltage_power_supply = 8; // voltage of power supply [V]
-  driver.pwm_frequency = 30000; // 30Khz, above hearing
-  driver.init();
-  motor.linkDriver(&driver);
-  i_sense_motor.linkDriver(&driver);
-
-  motor.voltage_sensor_align = 2;
-  motor.foc_modulation = FOCModulationType::SpaceVectorPWM;
-  motor.torque_controller = TorqueControlType::voltage;
-  motor.controller = MotionControlType::torque;
-    // velocity loop PID
-  motor.PID_velocity.P = 0.1;
-  motor.PID_velocity.I = 0.01;
-  // Low pass filtering time constant 
-  motor.LPF_velocity.Tf = 0.02;
-  // angle loop PID
-  motor.P_angle.P = 1.0;
-  // Low pass filtering time constant 
-  motor.LPF_angle.Tf = 0.0;
-  // current q loop PID 
-  motor.PID_current_q.P = 1.0;
-  motor.PID_current_q.I = 10.0;
-  // Low pass filtering time constant 
-  motor.LPF_current_q.Tf = 0.02;
-  // current d loop PID
-  motor.PID_current_d.P = 1.0;
-  motor.PID_current_d.I = 10.0;
-  // Low pass filtering time constant 
-  motor.LPF_current_d.Tf = 0.02;
-
-  // Limits 
-  motor.velocity_limit = 100.0; // 100 rad/s velocity limit
-  motor.voltage_limit = 12.0;   // 12 Volt limit 
-  motor.current_limit = 1.0;    // 2 Amp current limit
-
-  motor.init();
-  i_sense_motor.init();
-  motor.linkCurrentSense(&i_sense_motor);
-  motor.LPF_current_q.Tf = 0.05;
-  motor.initFOC();
-
-  return true;
-}
-
+// ============================================================
+//  LED
+// ============================================================
 CRGB ind[1];
 
-bool setup_indicator(){
-  pinMode(IND_LIGHT, OUTPUT);
-  FastLED.addLeds<SK6812, IND_LIGHT, GRB>(ind, 1);
-  ind[0] = CRGB::Blue;
-  // FastLED.setBrightness(75);
-  FastLED.show();
-  return true;
+// ============================================================
+//  State
+// ============================================================
+enum MotorMode { MODE_DISABLED, MODE_VELOCITY, MODE_POSITION, MODE_TORQUE, MODE_ERROR };
+MotorMode currentMode = MODE_DISABLED;
+float target = 0.0f;
+
+unsigned long lastCommandTime = 0;
+unsigned long lastTelemTime   = 0;
+
+char cmdBuf[CMD_BUF_LEN];
+
+// ============================================================
+//  LED helpers
+// ============================================================
+void updateLED() {
+    switch (currentMode) {
+        case MODE_DISABLED:  ind[0] = CRGB(0, 255, 255);   break;  // Cyan
+        case MODE_VELOCITY:  ind[0] = CRGB(0, 255, 0);     break;  // Green
+        case MODE_POSITION:  ind[0] = CRGB(255, 255, 0);   break;  // Yellow
+        case MODE_TORQUE:    ind[0] = CRGB(255, 0, 255);   break;  // Magenta
+        case MODE_ERROR:     ind[0] = CRGB(255, 0, 0);     break;  // Red
+    }
+    FastLED.show();
 }
 
-PhaseCurrent_s i_phase;
+// ============================================================
+//  Telemetry
+// ============================================================
+void sendTelemetry() {
+    if (millis() - lastTelemTime < TELEM_INTERVAL_MS) return;
+    lastTelemTime = millis();
+
+    char modeChar;
+    switch (currentMode) {
+        case MODE_VELOCITY: modeChar = 'V'; break;
+        case MODE_POSITION: modeChar = 'P'; break;
+        case MODE_TORQUE:   modeChar = 'T'; break;
+        case MODE_ERROR:    modeChar = 'E'; break;
+        default:            modeChar = 'D'; break;
+    }
+
+    Serial.printf("TELEM:%c:%.4f:%.4f:%.4f:%lu\n",
+        modeChar,
+        target,
+        motor.shaftAngle(),
+        motor.shaftVelocity(),
+        millis()
+    );
+}
+
+// ============================================================
+//  Heartbeat watchdog
+// ============================================================
+void checkHeartbeat() {
+    if (currentMode == MODE_DISABLED || currentMode == MODE_ERROR) return;
+    if (millis() - lastCommandTime > HEARTBEAT_TIMEOUT_MS) {
+        target = 0.0f;
+        motor.disable();
+        currentMode = MODE_DISABLED;
+        updateLED();
+        Serial.println("DBG:Heartbeat timeout - motor disabled");
+    }
+}
+
+// ============================================================
+//  Serial command parser
+//  Protocol: CMD:<type>:<value>\n
+//    CMD:V:<float>  - velocity mode (rad/s)
+//    CMD:P:<float>  - position mode (rad)
+//    CMD:T:<float>  - torque mode (voltage)
+//    CMD:O          - disable motor
+// ============================================================
+void processSerialCommand() {
+    if (!Serial.available()) return;
+
+    int len = Serial.readBytesUntil('\n', cmdBuf, CMD_BUF_LEN - 1);
+    cmdBuf[len] = '\0';
+
+    // Must start with "CMD:"
+    if (strncmp(cmdBuf, "CMD:", 4) != 0) return;
+
+    char type = cmdBuf[4];
+    float value = 0.0f;
+
+    // Parse value after second colon if present
+    if (len > 6 && cmdBuf[5] == ':') {
+        value = atof(&cmdBuf[6]);
+    }
+
+    switch (type) {
+        case 'V': {
+            // Clamp to velocity limit
+            value = constrain(value, -VELOCITY_LIMIT, VELOCITY_LIMIT);
+            target = value;
+            motor.controller = MotionControlType::velocity;
+            motor.voltage_limit = SPEED_VOLTAGE_LIMIT;
+            motor.current_limit = SPEED_CURRENT_LIMIT;
+            if (currentMode != MODE_VELOCITY) {
+                // Zero target before mode switch to avoid jerk
+                motor.move(0.0f);
+            }
+            motor.enable();
+            currentMode = MODE_VELOCITY;
+            updateLED();
+            lastCommandTime = millis();
+            break;
+        }
+
+        case 'P': {
+            target = value;  // rad — no hard clamp, mechanical limits are application-specific
+            motor.controller = MotionControlType::angle;
+            motor.voltage_limit = VOLTAGE_LIMIT;
+            motor.current_limit = CURRENT_LIMIT;
+            if (currentMode != MODE_POSITION) {
+                motor.move(motor.shaftAngle());  // hold current position before switching
+            }
+            motor.enable();
+            currentMode = MODE_POSITION;
+            updateLED();
+            lastCommandTime = millis();
+            break;
+        }
+
+        case 'T': {
+            // Clamp to max torque voltage
+            value = constrain(value, -MAX_CURRENT, MAX_CURRENT);
+            target = value;
+            motor.controller = MotionControlType::torque;
+            motor.voltage_limit = MAX_TORQUE_VOLTAGE;
+            motor.current_limit = MAX_CURRENT;
+            if (currentMode != MODE_TORQUE) {
+                motor.move(0.0f);
+            }
+            motor.enable();
+            currentMode = MODE_TORQUE;
+            updateLED();
+            lastCommandTime = millis();
+            break;
+        }
+
+        case 'O': {
+            target = 0.0f;
+            motor.disable();
+            currentMode = MODE_DISABLED;
+            updateLED();
+            break;
+        }
+
+        default:
+            Serial.printf("DBG:Unknown command type '%c'\n", type);
+            break;
+    }
+}
+
+// ============================================================
+//  Setup helpers
+// ============================================================
+void setup_indicator() {
+    pinMode(IND_LIGHT, OUTPUT);
+    FastLED.addLeds<SK6812, IND_LIGHT, GRB>(ind, 1);
+    ind[0] = CRGB(0, 0, 255);  // Blue during boot
+    FastLED.show();
+}
+
+bool setup_motor() {
+    // SPI buses
+    hspi.begin(enc_scl, enc_sda, enc_cs);
+    SPI.begin(SPI_CLK, SPI_CIPO, SPI_COPI, DRV_CS);
+    delay(300);
+
+    // Encoder
+    sensor.init(&hspi);
+    motor.linkSensor(&sensor);
+
+    // Driver
+    driver.voltage_power_supply = VOLTAGE_POWER_SUPPLY;
+    driver.pwm_frequency = 20000;
+    driver.init(&SPI);
+    driver.setCurrentSenseGain(DRV8316_CSAGain::Gain_0V15);
+    driver.setSlew(DRV8316_Slew::Slew_200Vus);
+    driver.setPWMMode(DRV8316_PWMMode::PWM6_Mode);
+    driver.setPWM100Frequency(DRV8316_PWM100DUTY::FREQ_20KHz);
+
+    motor.linkDriver(&driver);
+
+    // FOC configuration
+    motor.voltage_sensor_align  = 4;
+    motor.foc_modulation        = FOCModulationType::SpaceVectorPWM;
+    motor.torque_controller     = TorqueControlType::voltage;
+    motor.controller            = MotionControlType::torque;
+
+    // Limits
+    motor.voltage_limit  = VOLTAGE_LIMIT;
+    motor.current_limit  = CURRENT_LIMIT;
+    motor.velocity_limit = VELOCITY_LIMIT;
+
+    // Velocity PID
+    motor.PID_velocity.P           = 0.75f;
+    motor.PID_velocity.I           = 0.075f;
+    motor.PID_velocity.D           = 0.001f;
+    motor.PID_velocity.output_ramp = 1000.0f;
+    motor.LPF_velocity.Tf          = 0.05f;
+
+    // Angle PID
+    motor.P_angle.P = 20.0f;
+    motor.P_angle.I = 0.0f;
+    motor.P_angle.D = 0.0f;
+
+    // Current D PID
+    motor.PID_current_d.P           = 0.25f;
+    motor.PID_current_d.I           = 0.0f;
+    motor.PID_current_d.D           = 0.0f;
+    motor.PID_current_d.output_ramp = 0.0f;
+    motor.PID_current_d.limit       = 12.0f;
+    motor.LPF_current_d.Tf          = 0.01f;
+
+    // Current Q PID
+    motor.PID_current_q.P           = 1.0f;
+    motor.PID_current_q.I           = 0.0f;
+    motor.PID_current_q.D           = 0.0f;
+    motor.PID_current_q.output_ramp = 100.0f;
+    motor.PID_current_q.limit       = 12.0f;
+    motor.LPF_current_q.Tf          = 0.01f;
+
+    Serial.println("DBG:Initializing motor...");
+    delay(2000);
+    motor.init();
+    motor.initFOC();
+
+    // Calibrated sensor — load from SPIFFS or run calibration
+    Serial.println("DBG:Loading sensor calibration...");
+    sensor_calibrated.voltage_calibration = 4;
+
+    if (!SPIFFS.begin(true)) {
+        Serial.println("DBG:SPIFFS mount failed - calibration unavailable");
+        currentMode = MODE_ERROR;
+        updateLED();
+        return false;
+    }
+
+    if (!sensor_calibrated.loadCalibration(motor)) {
+        Serial.println("DBG:No calibration found - calibrating now (motor will rotate)...");
+        sensor_calibrated.calibrate(motor, 10);
+        sensor_calibrated.saveCalibration(motor);
+        Serial.println("DBG:Calibration saved");
+    } else {
+        Serial.println("DBG:Calibration loaded from SPIFFS");
+    }
+
+    // Switch to calibrated sensor and re-init FOC
+    motor.linkSensor(&sensor_calibrated);
+    motor.initFOC();
+
+    Serial.println("DBG:Motor ready");
+    return true;
+}
+
+// ============================================================
+//  Arduino entry points
+// ============================================================
 void setup() {
-  Serial.begin(5000000);
-  while (!Serial);
-  delay(1000);
-  Serial.println("Gimbus test");
-  setup_motor();
-  setup_indicator();
+    Serial.begin(115200);
+    delay(5000);
+
+    Serial.println("DBG:=== Gimbus Motor Driver Starting ===");
+
+    setup_indicator();
+
+    if (!setup_motor()) {
+        // Error state — LED already set red in setup_motor()
+        Serial.println("TELEM:E:0.0000:0.0000:0.0000:0");
+        // Halt — require power cycle to retry
+        while (true) {
+            ind[0] = (millis() / 250) % 2 ? CRGB(255, 0, 0) : CRGB(0, 0, 0);
+            FastLED.show();
+            delay(10);
+        }
+    }
+
+    motor.disable();
+    currentMode = MODE_DISABLED;
+    updateLED();
+
+    Serial.println("DBG:=== Ready ===");
+    Serial.println("DBG:Commands: CMD:V:<rad/s>  CMD:P:<rad>  CMD:T:<voltage>  CMD:O");
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  Serial.print("motor shaft angle: ");
-  Serial.print(motor.shaftAngle());
-  Serial.print("  - phase A Motor current: ");
-  Serial.println(i_sense_motor.getDCCurrent());
-  motor.move(1.0);
-  motor.loopFOC();
+    processSerialCommand();
+    checkHeartbeat();
+
+    motor.loopFOC();
+    motor.move(target);
+
+    sendTelemetry();
 }
